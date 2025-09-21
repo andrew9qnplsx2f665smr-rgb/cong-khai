@@ -1,0 +1,132 @@
+name: run-private-code
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_repo:
+        description: 'owner/repo của PRIVATE'
+        required: true
+        default: 'YOUR_USER_OR_ORG/YOUR_PRIVATE_REPO'
+      private_ref:
+        description: 'Nhánh/tag trong PRIVATE'
+        required: true
+        default: 'main'
+      workdir:
+        description: 'Thư mục chạy trong PRIVATE (chứa scripts/generate_thumbnails.py)'
+        required: true
+        default: '.'
+      youtube_privacy:
+        description: 'Trạng thái khi đăng YouTube'
+        type: choice
+        options: ['public', 'unlisted', 'private']
+        default: 'public'
+
+jobs:
+  run-private:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read    # repo public chỉ cần đọc; không ghi gì cả
+    concurrency:
+      group: run-private-${{ github.ref }}
+      cancel-in-progress: false
+
+    env:
+      # Secrets YouTube (bắt buộc nếu muốn up thẳng)
+      YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      YOUTUBE_PRIVACY:  ${{ inputs.youtube_privacy }}
+
+    steps:
+      - name: Checkout wrapper (repo PUBLIC)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ---- KÉO CODE TỪ REPO PRIVATE (CHỌN 1 TRONG 2 CÁCH) ----
+      - name: Checkout PRIVATE via PAT
+        id: co_pat
+        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.private_repo }}
+          ref: ${{ inputs.private_ref }}
+          path: private-src
+          fetch-depth: 1
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+
+      - name: Checkout PRIVATE via SSH Deploy Key
+        id: co_ssh
+        if: ${{ secrets.PRIVATE_REPO_TOKEN == '' && secrets.PRIVATE_SSH_KEY != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.private_repo }}
+          ref: ${{ inputs.private_ref }}
+          path: private-src
+          fetch-depth: 1
+          ssh-key: ${{ secrets.PRIVATE_SSH_KEY }}
+
+      - name: Verify PRIVATE checkout
+        run: |
+          if [ ! -d private-src ]; then
+            echo "::error::Không checkout được repo private. Cần PRIVATE_REPO_TOKEN hoặc PRIVATE_SSH_KEY."
+            exit 1
+          fi
+          echo "[OK] Code PRIVATE đã ở ./private-src"
+          ls -lah private-src | head -n 50
+
+      # ---- Preflight: bắt buộc có YouTube secrets nếu muốn up thẳng ----
+      - name: Require YT OAuth secrets
+        run: |
+          miss=0
+          for k in YT_CLIENT_ID YT_CLIENT_SECRET YT_REFRESH_TOKEN; do
+            if [ -z "${!k}" ]; then echo "::error::Thiếu secret $k"; miss=1; fi
+          done
+          if [ "$miss" = "1" ]; then
+            echo "Thiếu secrets YouTube -> dừng (flow này không tạo artifact/release)."
+            exit 1
+          fi
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps (ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('private-src/**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python deps
+        run: |
+          set -e
+          REQ=$(ls private-src/**/requirements*.txt 2>/dev/null | head -n1 || true)
+          if [ -n "$REQ" ]; then
+            echo "[INFO] Using requirements: $REQ"
+            pip install -r "$REQ"
+          else
+            echo "[INFO] No requirements*.txt found — install tối thiểu"
+            pip install Pillow opencv-python-headless numpy gdown \
+                        google-api-python-client google-auth google-auth-httplib2 \
+                        imageio-ffmpeg
+          fi
+
+      # ==== CHẠY CODE TRONG REPO PRIVATE (KHÔNG ĐỘNG VÀO PUBLIC) ====
+      - name: Run pipeline in PRIVATE (upload YouTube trực tiếp)
+        working-directory: private-src/${{ inputs.workdir }}
+        run: |
+          set -e
+          if [ ! -f "scripts/generate_thumbnails.py" ]; then
+            echo "::error::Không thấy scripts/generate_thumbnails.py trong $(pwd)"
+            ls -lah
+            exit 1
+          fi
+          python -u scripts/generate_thumbnails.py
