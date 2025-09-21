@@ -25,7 +25,7 @@ jobs:
   run-private:
     runs-on: ubuntu-latest
     permissions:
-      contents: read    # repo public chỉ cần đọc; không ghi gì cả
+      contents: read
     concurrency:
       group: run-private-${{ github.ref }}
       cancel-in-progress: false
@@ -43,10 +43,25 @@ jobs:
         with:
           fetch-depth: 1
 
-      # ---- KÉO CODE TỪ REPO PRIVATE (CHỌN 1 TRONG 2 CÁCH) ----
+      # --- Quyết định mode auth dựa trên secrets, KHÔNG dùng secrets trực tiếp trong if ---
+      - name: Determine auth mode
+        id: auth
+        env:
+          HAS_PAT: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          HAS_SSH: ${{ secrets.PRIVATE_SSH_KEY }}
+        run: |
+          if [ -n "$HAS_PAT" ]; then
+            echo "mode=pat" >> "$GITHUB_OUTPUT"
+          elif [ -n "$HAS_SSH" ]; then
+            echo "mode=ssh" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Auth mode: $(cat $GITHUB_OUTPUT)"
+
+      # ---- KÉO CODE TỪ REPO PRIVATE (theo mode ở trên) ----
       - name: Checkout PRIVATE via PAT
-        id: co_pat
-        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' }}
+        if: ${{ steps.auth.outputs.mode == 'pat' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.private_repo }}
@@ -56,8 +71,7 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
       - name: Checkout PRIVATE via SSH Deploy Key
-        id: co_ssh
-        if: ${{ secrets.PRIVATE_REPO_TOKEN == '' && secrets.PRIVATE_SSH_KEY != '' }}
+        if: ${{ steps.auth.outputs.mode == 'ssh' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.private_repo }}
@@ -66,12 +80,15 @@ jobs:
           fetch-depth: 1
           ssh-key: ${{ secrets.PRIVATE_SSH_KEY }}
 
+      - name: Fail if no auth available
+        if: ${{ steps.auth.outputs.mode == 'none' }}
+        run: |
+          echo "::error::Không checkout được repo private. Cần PRIVATE_REPO_TOKEN (PAT) hoặc PRIVATE_SSH_KEY (Deploy key)."
+          exit 1
+
       - name: Verify PRIVATE checkout
         run: |
-          if [ ! -d private-src ]; then
-            echo "::error::Không checkout được repo private. Cần PRIVATE_REPO_TOKEN hoặc PRIVATE_SSH_KEY."
-            exit 1
-          fi
+          test -d private-src
           echo "[OK] Code PRIVATE đã ở ./private-src"
           ls -lah private-src | head -n 50
 
