@@ -6,11 +6,11 @@ on:
       private_repo:
         description: 'owner/repo của PRIVATE'
         required: true
-        default: 'YOUR_USER_OR_ORG/YOUR_PRIVATE_REPO'
+        default: 'andrew9qnplsx2f665smr-rgb/randautien'
       private_ref:
         description: 'Nhánh/tag trong PRIVATE'
         required: true
-        default: 'main'
+        default: 'main'   # nếu repo private dùng 'master' thì sửa thành 'master'
       workdir:
         description: 'Thư mục chạy trong PRIVATE (chứa scripts/generate_thumbnails.py)'
         required: true
@@ -31,7 +31,7 @@ jobs:
       cancel-in-progress: false
 
     env:
-      # Secrets YouTube (bắt buộc nếu muốn up thẳng)
+      # Secrets YouTube (lấy từ repo PUBLIC)
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
@@ -43,7 +43,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      # --- Quyết định mode auth dựa trên secrets, KHÔNG dùng secrets trực tiếp trong if ---
+      # Quyết định mode auth mà KHÔNG dùng secrets trực tiếp trong if
       - name: Determine auth mode
         id: auth
         env:
@@ -57,9 +57,9 @@ jobs:
           else
             echo "mode=none" >> "$GITHUB_OUTPUT"
           fi
-          echo "Auth mode: $(cat $GITHUB_OUTPUT)"
+          echo "Auth mode set."
 
-      # ---- KÉO CODE TỪ REPO PRIVATE (theo mode ở trên) ----
+      # KÉO CODE từ repo PRIVATE bằng PAT
       - name: Checkout PRIVATE via PAT
         if: ${{ steps.auth.outputs.mode == 'pat' }}
         uses: actions/checkout@v4
@@ -70,6 +70,7 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
 
+      # Hoặc bằng SSH Deploy Key
       - name: Checkout PRIVATE via SSH Deploy Key
         if: ${{ steps.auth.outputs.mode == 'ssh' }}
         uses: actions/checkout@v4
@@ -92,7 +93,7 @@ jobs:
           echo "[OK] Code PRIVATE đã ở ./private-src"
           ls -lah private-src | head -n 50
 
-      # ---- Preflight: bắt buộc có YouTube secrets nếu muốn up thẳng ----
+      # Bắt buộc có secrets YT để up thẳng
       - name: Require YT OAuth secrets
         run: |
           miss=0
@@ -136,8 +137,8 @@ jobs:
                         imageio-ffmpeg
           fi
 
-      # ==== CHẠY CODE TRONG REPO PRIVATE (KHÔNG ĐỘNG VÀO PUBLIC) ====
-      - name: Run pipeline in PRIVATE (upload YouTube trực tiếp)
+      # CHẠY CODE ngay trong repo PRIVATE (upload YouTube trực tiếp)
+      - name: Run pipeline in PRIVATE
         working-directory: private-src/${{ inputs.workdir }}
         run: |
           set -e
