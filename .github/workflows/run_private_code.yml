@@ -148,3 +148,59 @@ jobs:
             exit 1
           fi
           python -u scripts/generate_thumbnails.py
+
+      - name: Commit & push state CSVs back to PRIVATE
+        working-directory: private-src
+        env:
+          # Ưu tiên PUSH_TOKEN_1 nếu bạn tạo secret riêng để push,
+          # nếu không có sẽ dùng lại PRIVATE_REPO_TOKEN.
+          PUSH_TOKEN_1: ${{ secrets.PRIVATE_REPO_PUSH_TOKEN }}
+          PUSH_TOKEN_2: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
+          PRIVATE_REF: ${{ inputs.private_ref }}
+        run: |
+          set -e
+          TOKEN="${PUSH_TOKEN_1:-$PUSH_TOKEN_2}"
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::Không có token để push. Bỏ qua commit."
+            exit 0
+          fi
+
+          # Thu thập các CSV cần commit (tìm ở root và cả workdir nếu khác '.')
+          FILES=""
+          for f in image_done.csv links_done.csv tieudedalay.csv; do
+            [ -f "$f" ] && FILES="$FILES $f"
+          done
+          if [ -n "${{ inputs.workdir }}" ] && [ "${{ inputs.workdir }}" != "." ]; then
+            for f in image_done.csv links_done.csv tieudedalay.csv; do
+              [ -f "${{ inputs.workdir }}/$f" ] && FILES="$FILES ${{ inputs.workdir }}/$f"
+            done
+          fi
+
+          if [ -z "$FILES" ]; then
+            echo "[INFO] Không thấy CSV nào để commit."
+            exit 0
+          fi
+
+          # Cấu hình Git bot
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Đảm bảo origin dùng token có quyền ghi
+          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+
+          # Kéo mới & rebase để tránh xung đột nếu có người khác cũng cập nhật
+          git pull --rebase origin "${PRIVATE_REF}" || true
+
+          # Add đúng 3 file CSV
+          git add -- $FILES
+
+          # Không commit rỗng
+          if git diff --cached --quiet; then
+            echo "[INFO] Không có thay đổi trong CSV."
+            exit 0
+          fi
+
+          git commit -m "ci(state): update image_done.csv, links_done.csv, tieudedalay.csv"
+          git push origin HEAD:"${PRIVATE_REF}"
+  
