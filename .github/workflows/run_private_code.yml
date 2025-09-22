@@ -149,24 +149,21 @@ jobs:
           fi
           python -u scripts/generate_thumbnails.py
 
-      - name: Commit & push state CSVs back to PRIVATE
+        # === Commit & PUSH qua PAT (HTTPS) ===
+      - name: Commit & push state CSVs back to PRIVATE (PAT)
+        if: ${{ steps.auth.outputs.mode == 'pat' }}
         working-directory: private-src
         env:
-          # Ưu tiên token riêng có quyền ghi; nếu không có sẽ dùng lại PRIVATE_REPO_TOKEN
-          PUSH_TOKEN_1: ${{ secrets.PRIVATE_REPO_PUSH_TOKEN }}
-          PUSH_TOKEN_2: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PUSH_TOKEN: ${{ secrets.PRIVATE_REPO_PUSH_TOKEN != '' && secrets.PRIVATE_REPO_PUSH_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
           PRIVATE_REPO: ${{ inputs.private_repo }}
           PRIVATE_REF: ${{ inputs.private_ref }}
         run: |
           set -e
-
-          TOKEN="${PUSH_TOKEN_1:-$PUSH_TOKEN_2}"
-          if [ -z "$TOKEN" ]; then
+          if [ -z "$PUSH_TOKEN" ]; then
             echo "::error::Thiếu token có quyền ghi (PRIVATE_REPO_PUSH_TOKEN hoặc PRIVATE_REPO_TOKEN)."
             exit 1
           fi
 
-          # Gom đúng 3 file CSV (ở root và/hoặc trong workdir)
           FILES=""
           for f in image_done.csv links_done.csv tieudedalay.csv; do
             [ -f "$f" ] && FILES="$FILES $f"
@@ -174,18 +171,15 @@ jobs:
               FILES="$FILES ${{ inputs.workdir }}/$f"
             fi
           done
-
           if [ -z "$FILES" ]; then
-            echo "[INFO] Không thấy CSV nào để commit — bỏ qua."
+            echo "[INFO] Không có CSV để commit."
             exit 0
           fi
 
-          # Cấu hình Git & remote với token có quyền ghi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${PRIVATE_REPO}.git"
 
-          # Nếu đang ở detached HEAD, tạo branch tạm để push
           CURBR=$(git rev-parse --abbrev-ref HEAD || true)
           if [ "$CURBR" = "HEAD" ]; then
             git checkout -b ci-state-update
@@ -193,9 +187,10 @@ jobs:
 
           git add -- $FILES
           if git diff --cached --quiet; then
-            echo "[INFO] Không có thay đổi trong CSV — bỏ qua."
+            echo "[INFO] Không có thay đổi trong CSV."
             exit 0
           fi
 
           git commit -m "ci(state): update image_done.csv, links_done.csv, tieudedalay.csv"
           git push origin HEAD:"${PRIVATE_REF}"
+
